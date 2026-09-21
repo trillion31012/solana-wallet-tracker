@@ -3,11 +3,15 @@ module solana-wallet-tracker
 go 1.27.1
 
 require (
+	github.com/JohannesJHN/iso4217 v0.0.0-20250910211824-d9ba0fe363a8
+	github.com/gagliardetto/solana-go v1.24.0
+)
+
+require (
 	github.com/blendle/zapdriver v1.3.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/gagliardetto/binary v0.8.0 // indirect
-	github.com/gagliardetto/solana-go v1.24.0 // indirect
 	github.com/gagliardetto/treeout v0.1.4 // indirect
 	github.com/goccy/go-json v0.10.6 // indirect
 	github.com/klauspost/compress v1.18.7 // indirect
