@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/gagliardetto/solana-go"
 )
@@ -15,11 +16,13 @@ func main() {
 	var wallet string
 	fmt.Scanln(&wallet)
 
+	wallet = strings.TrimSpace(wallet)
+
 	pubkey, err := solana.PublicKeyFromBase58(wallet)
 	if err != nil {
-		fmt.Println("Invalid Solana address.")
+		fmt.Println("Invalid Solana wallet address.")
 		return
 	}
 
-	fmt.Println("Valid address:", pubkey.String())
+	fmt.Println("Wallet address accepted:", pubkey.String())
 }
