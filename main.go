@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
 	"os"
 	"strings"
@@ -135,12 +136,15 @@ func shouldRetry(reader *bufio.Reader) bool {
 	}
 }
 
-func displayResult(currency iso4217.Currency, wallet string, lamports uint64) {
-	const lamportsPerSOL = 1_000_000_000
-	solBalance := float64(lamports) / lamportsPerSOL
+func displayResult(currency iso4217.Currency, wallet string, lamports uint64, solPrice *big.Rat, fiatValue *big.Rat) {
+	solBalance := new(big.Rat).SetUint64(lamports)
+	solBalance.Quo(solBalance, new(big.Rat).SetUint64(lamportsPerSOL))
+
 	fmt.Println("Wallet address accepted:", wallet)
 	fmt.Println("Selected currency:", currency.Alpha3)
-	fmt.Printf("SOL balance: %.9f SOL\n", solBalance)
+	fmt.Printf("SOL balance: %s SOL\n", solBalance.FloatString(9))
+	fmt.Printf("SOL price: %s %s\n", formatFiat(solPrice, currency.MinorUnits), currency.Alpha3)
+	fmt.Printf("Estimated value: %s %s\n", formatFiat(fiatValue, currency.MinorUnits), currency.Alpha3)
 }
 
 func main() {
@@ -151,6 +155,7 @@ func main() {
 	fmt.Println()
 	fmt.Println("Loading supported currencies...")
 
+	var prices PriceProvider = CoinbasePriceProvider{}
 	currencies := loadCurrencies()
 	currency, ok := getCurrency(reader, currencies)
 	if !ok {
@@ -164,15 +169,26 @@ func main() {
 
 	for {
 		lamports, err := getBalance(wallet)
-		if err == nil {
-			displayResult(currency, wallet, lamports)
-			break
+		if err != nil {
+			fmt.Println("Could not retrieve wallet balance:", err)
+			if !shouldRetry(reader) {
+				return
+			}
+			continue
 		}
 
-		fmt.Println("Could not retrieve wallet balance:", err)
-		if !shouldRetry(reader) {
-			return
+		solPrice, err := getSOLPrice(prices, currency.Alpha3)
+		if err != nil {
+			fmt.Println("Could not retrieve SOL price:", err)
+			if !shouldRetry(reader) {
+				return
+			}
+			continue
 		}
+
+		fiatValue := calculateValue(lamports, solPrice)
+		displayResult(currency, wallet, lamports, solPrice, fiatValue)
+		break
 	}
 
 	fmt.Println()
