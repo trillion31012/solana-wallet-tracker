@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/JohannesJHN/iso4217"
-	"github.com/gagliardetto/solana-go"
 )
 
 const solanaRPCURL = "https://api.mainnet-beta.solana.com"
@@ -62,29 +61,29 @@ func getCurrency(reader *bufio.Reader, currencies map[string]iso4217.Currency) (
 	}
 }
 
-func getWalletAddress(reader *bufio.Reader) (string, bool) {
+func getWalletAddress(reader *bufio.Reader) (Wallet, bool) {
 	for {
 		fmt.Print("Enter Solana wallet address: ")
 		wallet, ok := readLine(reader)
 		if !ok {
-			return "", false
+			return Wallet{}, false
 		}
 
-		pubkey, err := solana.PublicKeyFromBase58(wallet)
+		parsed, err := NewSolanaWallet(wallet)
 		if err == nil {
-			return pubkey.String(), true
+			return parsed, true
 		}
 
 		fmt.Println("Invalid Solana wallet address. Please try again.")
 	}
 }
 
-func getBalance(wallet string) (uint64, error) {
+func getBalance(wallet Wallet) (uint64, error) {
 	requestBody := rpcRequest{
 		JSONRPC: "2.0",
 		ID:      1,
 		Method:  "getBalance",
-		Params:  []interface{}{wallet},
+		Params:  []interface{}{wallet.Address},
 	}
 
 	body, err := json.Marshal(requestBody)
@@ -136,14 +135,16 @@ func shouldRetry(reader *bufio.Reader) bool {
 	}
 }
 
-func displayResult(currency iso4217.Currency, wallet string, lamports uint64, solPrice *big.Rat, fiatValue *big.Rat) {
-	solBalance := new(big.Rat).SetUint64(lamports)
-	solBalance.Quo(solBalance, new(big.Rat).SetUint64(lamportsPerSOL))
+func displayResult(currency iso4217.Currency, portfolio Portfolio, solPrice *big.Rat, fiatValue *big.Rat) {
+	solBalance, ok := portfolio.BalanceOf(NativeSOL)
+	if !ok {
+		solBalance = Balance{Asset: NativeSOL, Amount: 0}
+	}
 
-	fmt.Println("Wallet address accepted:", wallet)
+	fmt.Println("Wallet address accepted:", portfolio.Wallet.Address)
 	fmt.Println("Selected currency:", currency.Alpha3)
-	fmt.Printf("SOL balance: %s SOL\n", solBalance.FloatString(9))
-	fmt.Printf("SOL price: %s %s\n", formatFiat(solPrice, currency.MinorUnits), currency.Alpha3)
+	fmt.Printf("%s balance: %s %s\n", NativeSOL.Symbol, solBalance.Quantity().FloatString(NativeSOL.Decimals), NativeSOL.Symbol)
+	fmt.Printf("%s price: %s %s\n", NativeSOL.Symbol, formatFiat(solPrice, currency.MinorUnits), currency.Alpha3)
 	fmt.Printf("Estimated value: %s %s\n", formatFiat(fiatValue, currency.MinorUnits), currency.Alpha3)
 }
 
@@ -155,7 +156,7 @@ func main() {
 	fmt.Println()
 	fmt.Println("Loading supported currencies...")
 
-	var prices PriceProvider = CoinbasePriceProvider{}
+	prices := newPriceProvider()
 	currencies := loadCurrencies()
 	currency, ok := getCurrency(reader, currencies)
 	if !ok {
@@ -177,6 +178,12 @@ func main() {
 			continue
 		}
 
+		solBalance := Balance{Asset: NativeSOL, Amount: lamports}
+		portfolio := Portfolio{
+			Wallet:   wallet,
+			Balances: []Balance{solBalance},
+		}
+
 		solPrice, err := getSOLPrice(prices, currency.Alpha3)
 		if err != nil {
 			fmt.Println("Could not retrieve SOL price:", err)
@@ -186,8 +193,8 @@ func main() {
 			continue
 		}
 
-		fiatValue := calculateValue(lamports, solPrice)
-		displayResult(currency, wallet, lamports, solPrice, fiatValue)
+		fiatValue := portfolio.FiatValue(solPrice)
+		displayResult(currency, portfolio, solPrice, fiatValue)
 		break
 	}
 

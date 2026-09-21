@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	coinbaseSpotURLFmt = "https://api.coinbase.com/v2/prices/SOL-%s/spot"
+	coinbaseSpotURLFmt = "https://api.coinbase.com/v2/prices/%s-%s/spot"
 	priceHTTPTimeout   = 10 * time.Second
 )
 
@@ -19,6 +19,11 @@ var coinbaseHTTPClient = &http.Client{Timeout: priceHTTPTimeout}
 
 // CoinbasePriceProvider loads live SOL/fiat prices from Coinbase.
 type CoinbasePriceProvider struct{}
+
+// newPriceProvider is the only place the app chooses which PriceProvider to use.
+func newPriceProvider() PriceProvider {
+	return CoinbasePriceProvider{}
+}
 
 type coinbaseSpotPriceResponse struct {
 	Data coinbaseSpotPrice `json:"data"`
@@ -39,13 +44,21 @@ type coinbaseAPIError struct {
 	Message string `json:"message"`
 }
 
-func (CoinbasePriceProvider) GetSOLPrice(currencyCode string) (*big.Rat, error) {
+func (p CoinbasePriceProvider) GetSOLPrice(currencyCode string) (*big.Rat, error) {
+	return p.GetAssetPrice(NativeSOL, currencyCode)
+}
+
+func (p CoinbasePriceProvider) GetAssetPrice(asset Asset, currencyCode string) (*big.Rat, error) {
 	code := strings.ToUpper(strings.TrimSpace(currencyCode))
 	if code == "" {
 		return nil, fmt.Errorf("currency code is required")
 	}
 
-	requestURL := fmt.Sprintf(coinbaseSpotURLFmt, code)
+	baseSymbol := asset.Symbol
+	if baseSymbol == "" {
+		baseSymbol = NativeSOL.Symbol
+	}
+	requestURL := fmt.Sprintf(coinbaseSpotURLFmt, baseSymbol, code)
 	request, err := http.NewRequest(http.MethodGet, requestURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create price request: %w", err)
@@ -54,7 +67,7 @@ func (CoinbasePriceProvider) GetSOLPrice(currencyCode string) (*big.Rat, error) 
 
 	response, err := coinbaseHTTPClient.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("fetch SOL price: %w", err)
+		return nil, fmt.Errorf("fetch asset price: %w", err)
 	}
 	defer response.Body.Close()
 
@@ -64,7 +77,10 @@ func (CoinbasePriceProvider) GetSOLPrice(currencyCode string) (*big.Rat, error) 
 	}
 
 	if response.StatusCode != http.StatusOK {
-		return nil, coinbaseHTTPError(code, response.StatusCode, body)
+		if response.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("%w: %s/%s", ErrAssetUnsupported, baseSymbol, code)
+		}
+		return nil, p.httpError(code, response.StatusCode, body)
 	}
 
 	var result coinbaseSpotPriceResponse
@@ -75,8 +91,8 @@ func (CoinbasePriceProvider) GetSOLPrice(currencyCode string) (*big.Rat, error) 
 	if result.Data.Amount == "" || result.Data.Base == "" || result.Data.Currency == "" {
 		return nil, fmt.Errorf("invalid price response: missing amount, base, or currency")
 	}
-	if !strings.EqualFold(result.Data.Base, "SOL") {
-		return nil, fmt.Errorf("invalid price response: expected base SOL, got %s", result.Data.Base)
+	if !strings.EqualFold(result.Data.Base, baseSymbol) {
+		return nil, fmt.Errorf("invalid price response: expected base %s, got %s", baseSymbol, result.Data.Base)
 	}
 	if !strings.EqualFold(result.Data.Currency, code) {
 		return nil, fmt.Errorf("invalid price response: expected currency %s, got %s", code, result.Data.Currency)
@@ -93,11 +109,11 @@ func (CoinbasePriceProvider) GetSOLPrice(currencyCode string) (*big.Rat, error) 
 	return price, nil
 }
 
-func coinbaseHTTPError(currencyCode string, statusCode int, body []byte) error {
+func (p CoinbasePriceProvider) httpError(currencyCode string, statusCode int, body []byte) error {
 	var apiError coinbaseErrorResponse
 	if err := json.Unmarshal(body, &apiError); err == nil && len(apiError.Errors) > 0 {
 		message := apiError.Errors[0].Message
-		if isUnsupportedCurrencyError(statusCode, apiError.Errors[0]) {
+		if p.isUnsupportedCurrencyError(statusCode, apiError.Errors[0]) {
 			return fmt.Errorf("unsupported currency %s: %s", currencyCode, message)
 		}
 		return fmt.Errorf("price API HTTP %d: %s", statusCode, message)
@@ -110,7 +126,7 @@ func coinbaseHTTPError(currencyCode string, statusCode int, body []byte) error {
 	return fmt.Errorf("price API returned HTTP status %d", statusCode)
 }
 
-func isUnsupportedCurrencyError(statusCode int, apiError coinbaseAPIError) bool {
+func (CoinbasePriceProvider) isUnsupportedCurrencyError(statusCode int, apiError coinbaseAPIError) bool {
 	if statusCode == http.StatusNotFound {
 		return true
 	}
